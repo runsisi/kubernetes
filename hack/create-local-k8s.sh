@@ -446,14 +446,7 @@ EOF
     ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-apiserver" "${authorizer_arg}" "${priv_arg}" ${runtime_config} \
       "${advertise_address}" \
       "${node_port_range}" \
-      --v="${LOG_LEVEL}" \
-      --vmodule="${LOG_SPEC}" \
-      --audit-policy-file="${AUDIT_POLICY_FILE}" \
-      --audit-log-path="${LOG_DIR}/kube-apiserver-audit.log" \
-      --authorization-webhook-config-file="${AUTHORIZATION_WEBHOOK_CONFIG_FILE}" \
-      --authentication-token-webhook-config-file="${AUTHENTICATION_WEBHOOK_CONFIG_FILE}" \
       --cert-dir="${CERT_DIR}" \
-      --egress-selector-config-file="${EGRESS_SELECTOR_CONFIG_FILE:-}" \
       --client-ca-file="${CERT_DIR}/client-ca.crt" \
       --kubelet-client-certificate="${CERT_DIR}/client-kube-apiserver.crt" \
       --kubelet-client-key="${CERT_DIR}/client-kube-apiserver.key" \
@@ -462,9 +455,6 @@ EOF
       --service-account-issuer="https://kubernetes.default.svc" \
       --service-account-jwks-uri="https://kubernetes.default.svc/openid/v1/jwks" \
       --service-account-signing-key-file="${SERVICE_ACCOUNT_KEY}" \
-      --enable-admission-plugins="${ENABLE_ADMISSION_PLUGINS}" \
-      --disable-admission-plugins="${DISABLE_ADMISSION_PLUGINS}" \
-      --admission-control-config-file="${ADMISSION_CONTROL_CONFIG_FILE}" \
       --bind-address="${API_BIND_ADDR}" \
       --secure-port="${API_SECURE_PORT}" \
       --tls-cert-file="${CERT_DIR}/serving-kube-apiserver.crt" \
@@ -473,9 +463,7 @@ EOF
       --storage-media-type="${STORAGE_MEDIA_TYPE}" \
       --etcd-servers="http://${ETCD_HOST}:${ETCD_PORT}" \
       --service-cluster-ip-range="${SERVICE_CLUSTER_IP_RANGE}" \
-      --feature-gates="${FEATURE_GATES}" \
-      --external-hostname="${EXTERNAL_HOSTNAME}" \
-      --cors-allowed-origins="${API_CORS_ALLOWED_ORIGINS}" >"${APISERVER_LOG}" 2>&1 &
+      >"${APISERVER_LOG}" 2>&1 &
     APISERVER_PID=$!
 
     # Wait for kube-apiserver to come up before launching the rest of the components.
