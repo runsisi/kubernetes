@@ -116,9 +116,6 @@ ENABLE_ADMISSION_PLUGINS=${ENABLE_ADMISSION_PLUGINS:-"NamespaceLifecycle,LimitRa
 DISABLE_ADMISSION_PLUGINS=${DISABLE_ADMISSION_PLUGINS:-""}
 ADMISSION_CONTROL_CONFIG_FILE=${ADMISSION_CONTROL_CONFIG_FILE:-""}
 
-# START_MODE can be 'all', 'kubeletonly', 'nokubelet', 'nokubeproxy', or 'nokubelet,nokubeproxy'
-START_MODE=${START_MODE:-"all"}
-
 # A list of controllers to enable
 KUBE_CONTROLLERS="${KUBE_CONTROLLERS:-"*"}"
 
@@ -246,10 +243,6 @@ cleanup()
   [[ -n "${CTLRMGR_PID-}" ]] && kube::util::read-array CTLRMGR_PIDS < <(pgrep -P "${CTLRMGR_PID}" ; ps -o pid= -p "${CTLRMGR_PID}")
   [[ -n "${CTLRMGR_PIDS-}" ]] && sudo kill "${CTLRMGR_PIDS[@]}" 2>/dev/null
 
-  # Check if the cloud-controller-manager is still running
-  [[ -n "${CLOUD_CTLRMGR_PID-}" ]] && kube::util::read-array CLOUD_CTLRMGR_PIDS < <(pgrep -P "${CLOUD_CTLRMGR_PID}" ; ps -o pid= -p "${CLOUD_CTLRMGR_PID}")
-  [[ -n "${CLOUD_CTLRMGR_PIDS-}" ]] && sudo kill "${CLOUD_CTLRMGR_PIDS[@]}" 2>/dev/null
-
   # Check if the kubelet is still running
   [[ -n "${KUBELET_PID-}" ]] && kube::util::read-array KUBELET_PIDS < <(pgrep -P "${KUBELET_PID}" ; ps -o pid= -p "${KUBELET_PID}")
   [[ -n "${KUBELET_PIDS-}" ]] && sudo kill "${KUBELET_PIDS[@]}" 2>/dev/null
@@ -336,44 +329,37 @@ function set_service_accounts {
 
 function generate_certs {
     # Create CA signers
-    if [[ "${ENABLE_SINGLE_CA_SIGNER:-}" = true ]]; then
-        kube::util::create_signing_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" server '"client auth","server auth"'
-        sudo cp "${CERT_DIR}/server-ca.key" "${CERT_DIR}/client-ca.key"
-        sudo cp "${CERT_DIR}/server-ca.crt" "${CERT_DIR}/client-ca.crt"
-        sudo cp "${CERT_DIR}/server-ca-config.json" "${CERT_DIR}/client-ca-config.json"
-    else
-        kube::util::create_signing_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" server '"server auth"'
-        kube::util::create_signing_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" client '"client auth"'
-    fi
-
-    # Create auth proxy client ca
-    kube::util::create_signing_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" request-header '"client auth"'
+    # sudo, dest-dir, ca-id, purpose
+    kube::util::create_signing_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" server '"client auth","server auth"'
+    sudo cp "${CERT_DIR}/server-ca.key" "${CERT_DIR}/client-ca.key"
+    sudo cp "${CERT_DIR}/server-ca.crt" "${CERT_DIR}/client-ca.crt"
+    sudo cp "${CERT_DIR}/server-ca-config.json" "${CERT_DIR}/client-ca-config.json"
 
     # serving cert for kube-apiserver
+    # sudo, dest-dir, ca, filename (roughly), subject, hosts...
     kube::util::create_serving_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "server-ca" kube-apiserver kubernetes.default kubernetes.default.svc "localhost" "${API_HOST_IP}" "${API_HOST}" "${FIRST_SERVICE_CLUSTER_IP}"
 
     # Create client certs signed with client-ca, given id, given CN and a number of groups
+    # sudo, dest-dir, CA, filename (roughly), username, groups...
     kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' controller system:kube-controller-manager
     kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' scheduler  system:kube-scheduler
-    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' admin system:admin system:masters
     kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kube-apiserver kube-apiserver
-
-    # Create matching certificates for kube-aggregator
-    kube::util::create_serving_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "server-ca" kube-aggregator api.kube-public.svc "localhost" "${API_HOST_IP}"
-    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" request-header-ca auth-proxy system:auth-proxy
-
-    # TODO remove masters and add rolebinding
-    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kube-aggregator system:kube-aggregator system:masters
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" kube-aggregator
+    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' admin system:admin system:masters
 }
 
 function generate_kubeproxy_certs {
+    # sudo, dest-dir, CA, filename (roughly), username, groups...
     kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kube-proxy system:kube-proxy system:nodes
+
+    # sudo, dest-dir, ca file, host, port, client id, token(optional)
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" kube-proxy
 }
 
 function generate_kubelet_certs {
+    # sudo, dest-dir, CA, filename (roughly), username, groups...
     kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kubelet "system:node:${HOSTNAME_OVERRIDE}" system:nodes
+
+    # sudo, dest-dir, ca file, host, port, client id, token(optional)
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" kubelet
 }
 
@@ -426,8 +412,6 @@ function start_apiserver {
       generate_certs
     fi
 
-    cloud_config_arg="--cloud-provider=${CLOUD_PROVIDER} --cloud-config=${CLOUD_CONFIG}"
-
     if [[ -z "${EGRESS_SELECTOR_CONFIG_FILE:-}" ]]; then
       cat <<EOF > "${TMP_DIR}"/kube_egress_selector_configuration.yaml
 apiVersion: apiserver.k8s.io/v1beta1
@@ -460,7 +444,6 @@ EOF
     APISERVER_LOG=${LOG_DIR}/kube-apiserver.log
     # shellcheck disable=SC2086
     ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-apiserver" "${authorizer_arg}" "${priv_arg}" ${runtime_config} \
-      ${cloud_config_arg} \
       "${advertise_address}" \
       "${node_port_range}" \
       --v="${LOG_LEVEL}" \
@@ -492,13 +475,6 @@ EOF
       --service-cluster-ip-range="${SERVICE_CLUSTER_IP_RANGE}" \
       --feature-gates="${FEATURE_GATES}" \
       --external-hostname="${EXTERNAL_HOSTNAME}" \
-      --requestheader-username-headers=X-Remote-User \
-      --requestheader-group-headers=X-Remote-Group \
-      --requestheader-extra-headers-prefix=X-Remote-Extra- \
-      --requestheader-client-ca-file="${CERT_DIR}/request-header-ca.crt" \
-      --requestheader-allowed-names=system:auth-proxy \
-      --proxy-client-cert-file="${CERT_DIR}/client-auth-proxy.crt" \
-      --proxy-client-key-file="${CERT_DIR}/client-auth-proxy.key" \
       --cors-allowed-origins="${API_CORS_ALLOWED_ORIGINS}" >"${APISERVER_LOG}" 2>&1 &
     APISERVER_PID=$!
 
@@ -508,10 +484,12 @@ EOF
         || { echo "check apiserver logs: ${APISERVER_LOG}" ; exit 1 ; }
 
     # Create kubeconfigs for all components, using client certs
+    # sudo, dest-dir, ca file, host, port, client id, token(optional)
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" admin
-    ${CONTROLPLANE_SUDO} chown "${USER}" "${CERT_DIR}/client-admin.key" # make readable for kubectl
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" controller
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" scheduler
+
+    ${CONTROLPLANE_SUDO} chown "${USER}" "${CERT_DIR}/client-admin.key" # make readable for kubectl
 
     if [[ -z "${AUTH_ARGS}" ]]; then
         AUTH_ARGS="--client-key=${CERT_DIR}/client-admin.key --client-certificate=${CERT_DIR}/client-admin.crt"
@@ -522,17 +500,10 @@ EOF
     # Grant kubelets permission to request client certificates
     ${KUBECTL} --kubeconfig "${CERT_DIR}/admin.kubeconfig" create clusterrolebinding kubelet-csr --clusterrole=system:certificates.k8s.io:certificatesigningrequests:selfnodeclient --group=system:nodes
 
-    ${CONTROLPLANE_SUDO} cp "${CERT_DIR}/admin.kubeconfig" "${CERT_DIR}/admin-kube-aggregator.kubeconfig"
     ${CONTROLPLANE_SUDO} chown -R "$(whoami)" "${CERT_DIR}"
-    ${KUBECTL} config set-cluster local-up-cluster --kubeconfig="${CERT_DIR}/admin-kube-aggregator.kubeconfig" --server="https://${API_HOST_IP}:31090"
-    echo "use 'kubectl --kubeconfig=${CERT_DIR}/admin-kube-aggregator.kubeconfig' to use the aggregated API server"
-
 }
 
 function start_controller_manager {
-    cloud_config_arg=("--cloud-provider=${CLOUD_PROVIDER}" "--cloud-config=${CLOUD_CONFIG}")
-    cloud_config_arg+=("--configure-cloud-routes=${CONFIGURE_CLOUD_ROUTES}")
-
     CTLRMGR_LOG=${LOG_DIR}/kube-controller-manager.log
     ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-controller-manager" \
       --v="${LOG_LEVEL}" \
@@ -545,7 +516,6 @@ function start_controller_manager {
       --enable-hostpath-provisioner="${ENABLE_HOSTPATH_PROVISIONER}" \
       --pvclaimbinder-sync-period="${CLAIM_BINDER_SYNC_PERIOD}" \
       --feature-gates="${FEATURE_GATES}" \
-      "${cloud_config_arg[@]}" \
       --authentication-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
       --authorization-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
       --kubeconfig "${CERT_DIR}"/controller.kubeconfig \
@@ -608,8 +578,6 @@ function start_kubelet {
     KUBELET_LOG=${LOG_DIR}/kubelet.log
     mkdir -p "${POD_MANIFEST_PATH}" &>/dev/null || sudo mkdir -p "${POD_MANIFEST_PATH}"
 
-    cloud_config_arg=("--cloud-provider=${CLOUD_PROVIDER}" "--cloud-config=${CLOUD_CONFIG}")
-
     mkdir -p "/var/lib/kubelet" &>/dev/null || sudo mkdir -p "/var/lib/kubelet"
     container_runtime_endpoint_args=()
     if [[ -n "${CONTAINER_RUNTIME_ENDPOINT}" ]]; then
@@ -626,7 +594,6 @@ function start_kubelet {
       "--v=${LOG_LEVEL}"
       "--vmodule=${LOG_SPEC}"
       "--hostname-override=${HOSTNAME_OVERRIDE}"
-      "${cloud_config_arg[@]}"
       "--bootstrap-kubeconfig=${CERT_DIR}/kubelet.kubeconfig"
       "--kubeconfig=${CERT_DIR}/kubelet-rotated.kubeconfig"
       ${container_runtime_endpoint_args[@]+"${container_runtime_endpoint_args[@]}"}
@@ -721,11 +688,9 @@ EOF
 function start_kubeproxy {
     PROXY_LOG=${LOG_DIR}/kube-proxy.log
 
-    if [[ "${START_MODE}" != *"nokubelet"* ]]; then
-      # wait for kubelet collect node information
-      echo "wait kubelet ready"
-      wait_node_ready
-    fi
+    # wait for kubelet collect node information
+    echo "wait kubelet ready"
+    wait_node_ready
 
     cat <<EOF > "${TMP_DIR}"/kube-proxy.yaml
 apiVersion: kubeproxy.config.k8s.io/v1alpha1
@@ -810,7 +775,6 @@ function create_storage_class {
 }
 
 function print_success {
-if [[ "${START_MODE}" != "kubeletonly" ]]; then
   if [[ "${ENABLE_DAEMON}" = false ]]; then
     echo "Local Kubernetes cluster is running. Press Ctrl-C to shut it down."
   else
@@ -833,24 +797,16 @@ Logs:
   ${PROXY_LOG:-}
   ${SCHEDULER_LOG:-}
 EOF
-fi
 
-if [[ "${START_MODE}" == "all" ]]; then
-  echo "  ${KUBELET_LOG}"
-elif [[ "${START_MODE}" == *"nokubelet"* ]]; then
-  echo
-  echo "No kubelet was started because you set START_MODE=nokubelet"
-  echo "Run this script again with START_MODE=kubeletonly to run a kubelet"
-fi
+echo "  ${KUBELET_LOG}"
 
-if [[ "${START_MODE}" != "kubeletonly" ]]; then
-  echo
-  if [[ "${ENABLE_DAEMON}" = false ]]; then
-    echo "To start using your cluster, you can open up another terminal/tab and run:"
-  else
-    echo "To start using your cluster, run:"
-  fi
-  cat <<EOF
+echo
+if [[ "${ENABLE_DAEMON}" = false ]]; then
+  echo "To start using your cluster, you can open up another terminal/tab and run:"
+else
+  echo "To start using your cluster, run:"
+fi
+cat <<EOF
 
   export KUBECONFIG=${CERT_DIR}/admin.kubeconfig
   cluster/kubectl.sh
@@ -865,14 +821,6 @@ Alternatively, you can write to the default kubeconfig:
   cluster/kubectl.sh config use-context local
   cluster/kubectl.sh
 EOF
-else
-  cat <<EOF
-The kubelet was started.
-
-Logs:
-  ${KUBELET_LOG}
-EOF
-fi
 }
 
 function parse_feature_gates {
