@@ -24,7 +24,6 @@ KUBE_ROOT=$(dirname "${BASH_SOURCE[0]}")/..
 DOCKER_OPTS=${DOCKER_OPTS:-""}
 export DOCKER=(docker "${DOCKER_OPTS[@]}")
 DOCKER_ROOT=${DOCKER_ROOT:-""}
-ALLOW_PRIVILEGED=${ALLOW_PRIVILEGED:-""}
 DENY_SECURITY_CONTEXT_ADMISSION=${DENY_SECURITY_CONTEXT_ADMISSION:-""}
 KUBELET_AUTHORIZATION_WEBHOOK=${KUBELET_AUTHORIZATION_WEBHOOK:-""}
 KUBELET_AUTHENTICATION_WEBHOOK=${KUBELET_AUTHENTICATION_WEBHOOK:-""}
@@ -113,9 +112,6 @@ export KUBE_PANIC_WATCH_DECODE_ERROR
 ENABLE_ADMISSION_PLUGINS=${ENABLE_ADMISSION_PLUGINS:-"NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,DefaultTolerationSeconds,Priority,MutatingAdmissionWebhook,ValidatingAdmissionWebhook,ResourceQuota,NodeRestriction"}
 DISABLE_ADMISSION_PLUGINS=${DISABLE_ADMISSION_PLUGINS:-""}
 ADMISSION_CONTROL_CONFIG_FILE=${ADMISSION_CONTROL_CONFIG_FILE:-""}
-
-# A list of controllers to enable
-KUBE_CONTROLLERS="${KUBE_CONTROLLERS:-"*"}"
 
 # Stop right away if the build fails
 set -e
@@ -367,10 +363,6 @@ function start_apiserver {
     if [[ -n "${AUTHORIZATION_MODE}" ]]; then
       authorizer_arg="--authorization-mode=${AUTHORIZATION_MODE}"
     fi
-    priv_arg=""
-    if [[ -n "${ALLOW_PRIVILEGED}" ]]; then
-      priv_arg="--allow-privileged=${ALLOW_PRIVILEGED}"
-    fi
 
     # Let the API server pick a default address when API_HOST_IP
     # is set to 127.0.0.1
@@ -397,9 +389,8 @@ function start_apiserver {
 
     APISERVER_LOG=${LOG_DIR}/kube-apiserver.log
     # shellcheck disable=SC2086
-    ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-apiserver" "${authorizer_arg}" "${priv_arg}" \
-      "${advertise_address}" \
-      "${node_port_range}" \
+    ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-apiserver" \
+      "${authorizer_arg}" \
       --cert-dir="${CERT_DIR}" \
       --client-ca-file="${CERT_DIR}/client-ca.crt" \
       --kubelet-certificate-authority "${SERVER_CA_FILE}" \
@@ -414,8 +405,6 @@ function start_apiserver {
       --secure-port="${API_SECURE_PORT}" \
       --tls-cert-file="${CERT_DIR}/serving-kube-apiserver.crt" \
       --tls-private-key-file="${CERT_DIR}/serving-kube-apiserver.key" \
-      --storage-backend="${STORAGE_BACKEND}" \
-      --storage-media-type="${STORAGE_MEDIA_TYPE}" \
       --etcd-servers="http://${ETCD_HOST}:${ETCD_PORT}" \
       --service-cluster-ip-range="${SERVICE_CLUSTER_IP_RANGE}" \
       >"${APISERVER_LOG}" 2>&1 &
@@ -453,12 +442,11 @@ function start_controller_manager {
       --root-ca-file="${SERVER_CA_FILE}" \
       --cluster-signing-cert-file="${CERT_DIR}/client-ca.crt" \
       --cluster-signing-key-file="${CERT_DIR}/client-ca.key" \
-      --enable-hostpath-provisioner="${ENABLE_HOSTPATH_PROVISIONER}" \
-      --pvclaimbinder-sync-period="${CLAIM_BINDER_SYNC_PERIOD}" \
-      --feature-gates="${FEATURE_GATES}" \
+      --authentication-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
+      --authorization-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
       --kubeconfig "${CERT_DIR}"/controller.kubeconfig \
-      --use-service-account-credentials \
-      --controllers="${KUBE_CONTROLLERS}" \
+      --use-service-account-credentials=true \
+      --controllers="*" \
       --leader-elect=false \
       --cert-dir="${CERT_DIR}" \
       --master="https://${API_HOST_IP}:${API_SECURE_PORT}" >"${CTLRMGR_LOG}" 2>&1 &
@@ -532,8 +520,7 @@ function start_kubelet {
       "--v=${LOG_LEVEL}"
       "--vmodule=${LOG_SPEC}"
       "--hostname-override=${HOSTNAME_OVERRIDE}"
-      "--bootstrap-kubeconfig=${CERT_DIR}/kubelet.kubeconfig"
-      "--kubeconfig=${CERT_DIR}/kubelet-rotated.kubeconfig"
+      "--kubeconfig=${CERT_DIR}/kubelet.kubeconfig"
       ${container_runtime_endpoint_args[@]+"${container_runtime_endpoint_args[@]}"}
       ${image_service_endpoint_args[@]+"${image_service_endpoint_args[@]}"}
       ${KUBELET_FLAGS}
@@ -560,7 +547,7 @@ evictionPressureTransitionPeriod: "${EVICTION_PRESSURE_TRANSITION_PERIOD}"
 failSwapOn: false
 port: ${KUBELET_PORT}
 readOnlyPort: ${KUBELET_READ_ONLY_PORT}
-rotateCertificates: true
+rotateCertificates: false
 runtimeRequestTimeout: "${RUNTIME_REQUEST_TIMEOUT}"
 staticPodPath: "${POD_MANIFEST_PATH}"
 resolvConf: "${KUBELET_RESOLV_CONF}"
