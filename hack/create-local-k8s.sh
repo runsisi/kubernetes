@@ -192,9 +192,7 @@ LOCAL_STORAGE_CAPACITY_ISOLATION=${LOCAL_STORAGE_CAPACITY_ISOLATION:-"true"} # c
 # This is the default dir and filename where the apiserver will generate a self-signed cert
 # which should be able to be used as the CA to verify itself
 CERT_DIR=${CERT_DIR:-"/var/run/kubernetes"}
-ROOT_CA_FILE=${CERT_DIR}/server-ca.crt
-CLUSTER_SIGNING_CERT_FILE=${CLUSTER_SIGNING_CERT_FILE:-"${CERT_DIR}/client-ca.crt"}
-CLUSTER_SIGNING_KEY_FILE=${CLUSTER_SIGNING_KEY_FILE:-"${CERT_DIR}/client-ca.key"}
+SERVER_CA_FILE=${CERT_DIR}/server-ca.crt
 # Reuse certs will skip generate new ca/cert files under CERT_DIR
 # it's useful with PRESERVE_ETCD=true because new ca will make existed service account secrets invalided
 REUSE_CERTS=${REUSE_CERTS:-false}
@@ -341,18 +339,18 @@ function generate_certs {
 
     # Create client certs signed with client-ca, given id, given CN and a number of groups
     # sudo, dest-dir, CA, filename (roughly), username, groups...
-    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' controller system:kube-controller-manager
-    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' scheduler  system:kube-scheduler
+    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' controller     system:kube-controller-manager
+    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' scheduler      system:kube-scheduler
     kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kube-apiserver kube-apiserver
-    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' admin system:admin system:masters
+    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' admin          system:admin system:masters
 }
 
 function generate_kubeproxy_certs {
     # sudo, dest-dir, CA, filename (roughly), username, groups...
-    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kube-proxy system:kube-proxy system:nodes
+    kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kube-proxy     system:kube-proxy system:nodes
 
     # sudo, dest-dir, ca file, host, port, client id, token(optional)
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" kube-proxy
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" kube-proxy
 }
 
 function generate_kubelet_certs {
@@ -360,7 +358,7 @@ function generate_kubelet_certs {
     kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kubelet "system:node:${HOSTNAME_OVERRIDE}" system:nodes
 
     # sudo, dest-dir, ca file, host, port, client id, token(optional)
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" kubelet
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" kubelet
 }
 
 function start_apiserver {
@@ -448,6 +446,7 @@ EOF
       "${node_port_range}" \
       --cert-dir="${CERT_DIR}" \
       --client-ca-file="${CERT_DIR}/client-ca.crt" \
+      --kubelet-certificate-authority "${SERVER_CA_FILE}" \
       --kubelet-client-certificate="${CERT_DIR}/client-kube-apiserver.crt" \
       --kubelet-client-key="${CERT_DIR}/client-kube-apiserver.key" \
       --service-account-key-file="${SERVICE_ACCOUNT_KEY}" \
@@ -473,9 +472,9 @@ EOF
 
     # Create kubeconfigs for all components, using client certs
     # sudo, dest-dir, ca file, host, port, client id, token(optional)
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" admin
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" controller
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${ROOT_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" scheduler
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" admin
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" controller
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" scheduler
 
     ${CONTROLPLANE_SUDO} chown "${USER}" "${CERT_DIR}/client-admin.key" # make readable for kubectl
 
@@ -498,14 +497,12 @@ function start_controller_manager {
       --vmodule="${LOG_SPEC}" \
       --service-account-private-key-file="${SERVICE_ACCOUNT_KEY}" \
       --service-cluster-ip-range="${SERVICE_CLUSTER_IP_RANGE}" \
-      --root-ca-file="${ROOT_CA_FILE}" \
-      --cluster-signing-cert-file="${CLUSTER_SIGNING_CERT_FILE}" \
-      --cluster-signing-key-file="${CLUSTER_SIGNING_KEY_FILE}" \
+      --root-ca-file="${SERVER_CA_FILE}" \
+      --cluster-signing-cert-file="${CERT_DIR}/client-ca.crt" \
+      --cluster-signing-key-file="${CERT_DIR}/client-ca.key" \
       --enable-hostpath-provisioner="${ENABLE_HOSTPATH_PROVISIONER}" \
       --pvclaimbinder-sync-period="${CLAIM_BINDER_SYNC_PERIOD}" \
       --feature-gates="${FEATURE_GATES}" \
-      --authentication-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
-      --authorization-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
       --kubeconfig "${CERT_DIR}"/controller.kubeconfig \
       --use-service-account-credentials \
       --controllers="${KUBE_CONTROLLERS}" \
@@ -626,11 +623,7 @@ EOF
         echo "    enabled: false"
       fi
       echo "  x509:"
-      if [[ -n "${CLIENT_CA_FILE:-}" ]]; then
-        echo "    clientCAFile: \"${CLIENT_CA_FILE}\""
-      else
         echo "    clientCAFile: \"${CERT_DIR}/client-ca.crt\""
-      fi
 
       # authorization
       if [[ "${KUBELET_AUTHORIZATION_WEBHOOK:-}" != "false" ]]; then
@@ -803,7 +796,7 @@ Alternatively, you can write to the default kubeconfig:
 
   export KUBERNETES_PROVIDER=local
 
-  cluster/kubectl.sh config set-cluster local --server=https://${API_HOST}:${API_SECURE_PORT} --certificate-authority=${ROOT_CA_FILE}
+  cluster/kubectl.sh config set-cluster local --server=https://${API_HOST}:${API_SECURE_PORT} --certificate-authority=${SERVER_CA_FILE}
   cluster/kubectl.sh config set-credentials myself ${AUTH_ARGS}
   cluster/kubectl.sh config set-context local --cluster=local --user=myself
   cluster/kubectl.sh config use-context local
