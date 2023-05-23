@@ -26,7 +26,6 @@ export DOCKER=(docker "${DOCKER_OPTS[@]}")
 DOCKER_ROOT=${DOCKER_ROOT:-""}
 ALLOW_PRIVILEGED=${ALLOW_PRIVILEGED:-""}
 DENY_SECURITY_CONTEXT_ADMISSION=${DENY_SECURITY_CONTEXT_ADMISSION:-""}
-RUNTIME_CONFIG=${RUNTIME_CONFIG:-""}
 KUBELET_AUTHORIZATION_WEBHOOK=${KUBELET_AUTHORIZATION_WEBHOOK:-""}
 KUBELET_AUTHENTICATION_WEBHOOK=${KUBELET_AUTHENTICATION_WEBHOOK:-""}
 POD_MANIFEST_PATH=${POD_MANIFEST_PATH:-"/var/run/kubernetes/static-pods"}
@@ -63,7 +62,7 @@ EVICTION_PRESSURE_TRANSITION_PERIOD=${EVICTION_PRESSURE_TRANSITION_PERIOD:-"1m"}
 # This script uses docker0 (or whatever container bridge docker is currently using)
 # and we don't know the IP of the DNS pod to pass in as --cluster-dns.
 # To set this up by hand, set this flag and change DNS_SERVER_IP.
-# Note also that you need API_HOST (defined below) for correct DNS.
+# Note also that you need API_HOST_IP (defined below) for correct DNS.
 KUBE_PROXY_MODE=${KUBE_PROXY_MODE:-""}
 ENABLE_CLUSTER_DNS=${KUBE_ENABLE_CLUSTER_DNS:-true}
 ENABLE_NODELOCAL_DNS=${KUBE_ENABLE_NODELOCAL_DNS:-false}
@@ -92,7 +91,6 @@ ENABLE_TRACING=${ENABLE_TRACING:-false}
 # RBAC Mode options
 AUTHORIZATION_MODE=${AUTHORIZATION_MODE:-"Node,RBAC"}
 KUBECONFIG_TOKEN=${KUBECONFIG_TOKEN:-""}
-AUTH_ARGS=${AUTH_ARGS:-""}
 
 # WebHook Authentication and Authorization
 AUTHORIZATION_WEBHOOK_CONFIG_FILE=${AUTHORIZATION_WEBHOOK_CONFIG_FILE:-""}
@@ -118,9 +116,6 @@ ADMISSION_CONTROL_CONFIG_FILE=${ADMISSION_CONTROL_CONFIG_FILE:-""}
 
 # A list of controllers to enable
 KUBE_CONTROLLERS="${KUBE_CONTROLLERS:-"*"}"
-
-# Audit policy
-AUDIT_POLICY_FILE=${AUDIT_POLICY_FILE:-""}
 
 # Stop right away if the build fails
 set -e
@@ -161,12 +156,9 @@ set +e
 API_PORT=${API_PORT:-0}
 API_SECURE_PORT=${API_SECURE_PORT:-6443}
 
-# WARNING: For DNS to work on most setups you should export API_HOST as the docker0 ip address,
-API_HOST=${API_HOST:-localhost}
+# WARNING: For DNS to work on most setups you should export API_HOST_IP as the docker0 ip address,
 API_HOST_IP=${API_HOST_IP:-"127.0.0.1"}
-ADVERTISE_ADDRESS=${ADVERTISE_ADDRESS:-""}
 NODE_PORT_RANGE=${NODE_PORT_RANGE:-""}
-API_BIND_ADDR=${API_BIND_ADDR:-"0.0.0.0"}
 EXTERNAL_HOSTNAME=${EXTERNAL_HOSTNAME:-localhost}
 
 KUBELET_HOST=${KUBELET_HOST:-"127.0.0.1"}
@@ -206,18 +198,18 @@ function test_apiserver_off {
     # For the common local scenario, fail fast if server is already running.
     # this can happen if you run local-up-cluster.sh twice and kill etcd in between.
     if [[ "${API_PORT}" -gt "0" ]]; then
-        if ! curl --silent -g "${API_HOST}:${API_PORT}" ; then
+        if ! curl --silent -g "${API_HOST_IP}:${API_PORT}" ; then
             echo "API SERVER insecure port is free, proceeding..."
         else
-            echo "ERROR starting API SERVER, exiting. Some process on ${API_HOST} is serving already on ${API_PORT}"
+            echo "ERROR starting API SERVER, exiting. Some process on ${API_HOST_IP} is serving already on ${API_PORT}"
             exit 1
         fi
     fi
 
-    if ! curl --silent -k -g "${API_HOST}:${API_SECURE_PORT}" ; then
+    if ! curl --silent -k -g "${API_HOST_IP}:${API_SECURE_PORT}" ; then
         echo "API SERVER secure port is free, proceeding..."
     else
-        echo "ERROR starting API SERVER, exiting. Some process on ${API_HOST} is serving already on ${API_SECURE_PORT}"
+        echo "ERROR starting API SERVER, exiting. Some process on ${API_HOST_IP} is serving already on ${API_SECURE_PORT}"
         exit 1
     fi
 }
@@ -329,13 +321,14 @@ function generate_certs {
     # Create CA signers
     # sudo, dest-dir, ca-id, purpose
     kube::util::create_signing_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" server '"client auth","server auth"'
+
     sudo cp "${CERT_DIR}/server-ca.key" "${CERT_DIR}/client-ca.key"
     sudo cp "${CERT_DIR}/server-ca.crt" "${CERT_DIR}/client-ca.crt"
     sudo cp "${CERT_DIR}/server-ca-config.json" "${CERT_DIR}/client-ca-config.json"
 
     # serving cert for kube-apiserver
     # sudo, dest-dir, ca, filename (roughly), subject, hosts...
-    kube::util::create_serving_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "server-ca" kube-apiserver kubernetes.default kubernetes.default.svc "localhost" "${API_HOST_IP}" "${API_HOST}" "${FIRST_SERVICE_CLUSTER_IP}"
+    kube::util::create_serving_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "server-ca" kube-apiserver kubernetes.default kubernetes.default.svc "localhost" "${API_HOST_IP}" "${FIRST_SERVICE_CLUSTER_IP}"
 
     # Create client certs signed with client-ca, given id, given CN and a number of groups
     # sudo, dest-dir, CA, filename (roughly), username, groups...
@@ -350,7 +343,7 @@ function generate_kubeproxy_certs {
     kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kube-proxy     system:kube-proxy system:nodes
 
     # sudo, dest-dir, ca file, host, port, client id, token(optional)
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" kube-proxy
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST_IP}" "${API_SECURE_PORT}" kube-proxy
 }
 
 function generate_kubelet_certs {
@@ -358,7 +351,7 @@ function generate_kubelet_certs {
     kube::util::create_client_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" 'client-ca' kubelet "system:node:${HOSTNAME_OVERRIDE}" system:nodes
 
     # sudo, dest-dir, ca file, host, port, client id, token(optional)
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" kubelet
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST_IP}" "${API_SECURE_PORT}" kubelet
 }
 
 function start_apiserver {
@@ -379,19 +372,11 @@ function start_apiserver {
       priv_arg="--allow-privileged=${ALLOW_PRIVILEGED}"
     fi
 
-    runtime_config=""
-    if [[ -n "${RUNTIME_CONFIG}" ]]; then
-      runtime_config="--runtime-config=${RUNTIME_CONFIG}"
-    fi
-
     # Let the API server pick a default address when API_HOST_IP
     # is set to 127.0.0.1
     advertise_address=""
     if [[ "${API_HOST_IP}" != "127.0.0.1" ]]; then
         advertise_address="--advertise-address=${API_HOST_IP}"
-    fi
-    if [[ "${ADVERTISE_ADDRESS}" != "" ]] ; then
-        advertise_address="--advertise-address=${ADVERTISE_ADDRESS}"
     fi
     node_port_range=""
     if [[ "${NODE_PORT_RANGE}" != "" ]] ; then
@@ -410,38 +395,9 @@ function start_apiserver {
       generate_certs
     fi
 
-    if [[ -z "${EGRESS_SELECTOR_CONFIG_FILE:-}" ]]; then
-      cat <<EOF > "${TMP_DIR}"/kube_egress_selector_configuration.yaml
-apiVersion: apiserver.k8s.io/v1beta1
-kind: EgressSelectorConfiguration
-egressSelections:
-- name: cluster
-  connection:
-    proxyProtocol: Direct
-- name: controlplane
-  connection:
-    proxyProtocol: Direct
-- name: etcd
-  connection:
-    proxyProtocol: Direct
-EOF
-      EGRESS_SELECTOR_CONFIG_FILE="${TMP_DIR}/kube_egress_selector_configuration.yaml"
-    fi
-
-    if [[ -z "${AUDIT_POLICY_FILE}" ]]; then
-      cat <<EOF > "${TMP_DIR}"/kube-audit-policy-file
-# Log all requests at the Metadata level.
-apiVersion: audit.k8s.io/v1
-kind: Policy
-rules:
-- level: Metadata
-EOF
-      AUDIT_POLICY_FILE="${TMP_DIR}/kube-audit-policy-file"
-    fi
-
     APISERVER_LOG=${LOG_DIR}/kube-apiserver.log
     # shellcheck disable=SC2086
-    ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-apiserver" "${authorizer_arg}" "${priv_arg}" ${runtime_config} \
+    ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-apiserver" "${authorizer_arg}" "${priv_arg}" \
       "${advertise_address}" \
       "${node_port_range}" \
       --cert-dir="${CERT_DIR}" \
@@ -454,7 +410,7 @@ EOF
       --service-account-issuer="https://kubernetes.default.svc" \
       --service-account-jwks-uri="https://kubernetes.default.svc/openid/v1/jwks" \
       --service-account-signing-key-file="${SERVICE_ACCOUNT_KEY}" \
-      --bind-address="${API_BIND_ADDR}" \
+      --bind-address="0.0.0.0" \
       --secure-port="${API_SECURE_PORT}" \
       --tls-cert-file="${CERT_DIR}/serving-kube-apiserver.crt" \
       --tls-private-key-file="${CERT_DIR}/serving-kube-apiserver.key" \
@@ -472,15 +428,12 @@ EOF
 
     # Create kubeconfigs for all components, using client certs
     # sudo, dest-dir, ca file, host, port, client id, token(optional)
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" admin
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" controller
-    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST}" "${API_SECURE_PORT}" scheduler
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST_IP}" "${API_SECURE_PORT}" admin
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST_IP}" "${API_SECURE_PORT}" controller
+    kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST_IP}" "${API_SECURE_PORT}" scheduler
 
     ${CONTROLPLANE_SUDO} chown "${USER}" "${CERT_DIR}/client-admin.key" # make readable for kubectl
 
-    if [[ -z "${AUTH_ARGS}" ]]; then
-        AUTH_ARGS="--client-key=${CERT_DIR}/client-admin.key --client-certificate=${CERT_DIR}/client-admin.crt"
-    fi
     # Grant apiserver permission to speak to the kubelet
     ${KUBECTL} --kubeconfig "${CERT_DIR}/admin.kubeconfig" create clusterrolebinding kube-apiserver-kubelet-admin --clusterrole=system:kubelet-api-admin --user=kube-apiserver
 
@@ -508,7 +461,7 @@ function start_controller_manager {
       --controllers="${KUBE_CONTROLLERS}" \
       --leader-elect=false \
       --cert-dir="${CERT_DIR}" \
-      --master="https://${API_HOST}:${API_SECURE_PORT}" >"${CTLRMGR_LOG}" 2>&1 &
+      --master="https://${API_HOST_IP}:${API_SECURE_PORT}" >"${CTLRMGR_LOG}" 2>&1 &
     CTLRMGR_PID=$!
 }
 
@@ -700,7 +653,7 @@ EOF
     sudo "${GO_OUT}/kube-proxy" \
       --v="${LOG_LEVEL}" \
       --config="${TMP_DIR}"/kube-proxy.yaml \
-      --master="https://${API_HOST}:${API_SECURE_PORT}" >"${PROXY_LOG}" 2>&1 &
+      --master="https://${API_HOST_IP}:${API_SECURE_PORT}" >"${PROXY_LOG}" 2>&1 &
     PROXY_PID=$!
 }
 
@@ -721,7 +674,7 @@ EOF
       --feature-gates="${FEATURE_GATES}" \
       --authentication-kubeconfig "${CERT_DIR}"/scheduler.kubeconfig \
       --authorization-kubeconfig "${CERT_DIR}"/scheduler.kubeconfig \
-      --master="https://${API_HOST}:${API_SECURE_PORT}" >"${SCHEDULER_LOG}" 2>&1 &
+      --master="https://${API_HOST_IP}:${API_SECURE_PORT}" >"${SCHEDULER_LOG}" 2>&1 &
     SCHEDULER_PID=$!
 }
 
@@ -787,6 +740,7 @@ if [[ "${ENABLE_DAEMON}" = false ]]; then
 else
   echo "To start using your cluster, run:"
 fi
+AUTH_ARGS="--client-key=${CERT_DIR}/client-admin.key --client-certificate=${CERT_DIR}/client-admin.crt"
 cat <<EOF
 
   export KUBECONFIG=${CERT_DIR}/admin.kubeconfig
@@ -796,7 +750,7 @@ Alternatively, you can write to the default kubeconfig:
 
   export KUBERNETES_PROVIDER=local
 
-  cluster/kubectl.sh config set-cluster local --server=https://${API_HOST}:${API_SECURE_PORT} --certificate-authority=${SERVER_CA_FILE}
+  cluster/kubectl.sh config set-cluster local --server=https://${API_HOST_IP}:${API_SECURE_PORT} --certificate-authority=${SERVER_CA_FILE}
   cluster/kubectl.sh config set-credentials myself ${AUTH_ARGS}
   cluster/kubectl.sh config set-context local --cluster=local --user=myself
   cluster/kubectl.sh config use-context local
