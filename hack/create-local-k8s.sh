@@ -322,9 +322,9 @@ function generate_certs {
     sudo cp "${CERT_DIR}/server-ca.crt" "${CERT_DIR}/client-ca.crt"
     sudo cp "${CERT_DIR}/server-ca-config.json" "${CERT_DIR}/client-ca-config.json"
 
-    # serving cert for kube-apiserver
+    # serving cert for kube-apiserver & others
     # sudo, dest-dir, ca, filename (roughly), subject, hosts...
-    kube::util::create_serving_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "server-ca" kube-apiserver kubernetes.default kubernetes.default.svc "localhost" "${API_HOST_IP}" "${FIRST_SERVICE_CLUSTER_IP}"
+    kube::util::create_serving_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "server-ca" kube kubernetes.default kubernetes.default.svc "localhost" "${API_HOST_IP}" "${FIRST_SERVICE_CLUSTER_IP}"
 
     # Create client certs signed with client-ca, given id, given CN and a number of groups
     # sudo, dest-dir, CA, filename (roughly), username, groups...
@@ -391,6 +391,8 @@ function start_apiserver {
     # shellcheck disable=SC2086
     ${CONTROLPLANE_SUDO} "${GO_OUT}/kube-apiserver" \
       "${authorizer_arg}" \
+      --v="${LOG_LEVEL}" \
+      --vmodule="${LOG_SPEC}" \
       --cert-dir="${CERT_DIR}" \
       --client-ca-file="${CERT_DIR}/client-ca.crt" \
       --kubelet-certificate-authority "${SERVER_CA_FILE}" \
@@ -403,8 +405,8 @@ function start_apiserver {
       --service-account-signing-key-file="${SERVICE_ACCOUNT_KEY}" \
       --bind-address="0.0.0.0" \
       --secure-port="${API_SECURE_PORT}" \
-      --tls-cert-file="${CERT_DIR}/serving-kube-apiserver.crt" \
-      --tls-private-key-file="${CERT_DIR}/serving-kube-apiserver.key" \
+      --tls-cert-file="${CERT_DIR}/serving-kube.crt" \
+      --tls-private-key-file="${CERT_DIR}/serving-kube.key" \
       --etcd-servers="http://${ETCD_HOST}:${ETCD_PORT}" \
       --service-cluster-ip-range="${SERVICE_CLUSTER_IP_RANGE}" \
       >"${APISERVER_LOG}" 2>&1 &
@@ -445,10 +447,12 @@ function start_controller_manager {
       --authentication-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
       --authorization-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
       --kubeconfig "${CERT_DIR}"/controller.kubeconfig \
-      --use-service-account-credentials=true \
+      --use-service-account-credentials=false \
       --controllers="*" \
       --leader-elect=false \
       --cert-dir="${CERT_DIR}" \
+      --tls-cert-file="${CERT_DIR}/serving-kube.crt" \
+      --tls-private-key-file="${CERT_DIR}/serving-kube.key" \
       --master="https://${API_HOST_IP}:${API_SECURE_PORT}" >"${CTLRMGR_LOG}" 2>&1 &
     CTLRMGR_PID=$!
 }
@@ -551,6 +555,8 @@ rotateCertificates: false
 runtimeRequestTimeout: "${RUNTIME_REQUEST_TIMEOUT}"
 staticPodPath: "${POD_MANIFEST_PATH}"
 resolvConf: "${KUBELET_RESOLV_CONF}"
+tlsCertFile: "${CERT_DIR}/serving-kube.crt"
+tlsPrivateKeyFile: "${CERT_DIR}/serving-kube.key"
 EOF
 
     {
@@ -661,6 +667,8 @@ EOF
       --feature-gates="${FEATURE_GATES}" \
       --authentication-kubeconfig "${CERT_DIR}"/scheduler.kubeconfig \
       --authorization-kubeconfig "${CERT_DIR}"/scheduler.kubeconfig \
+      --tls-cert-file="${CERT_DIR}/serving-kube.crt" \
+      --tls-private-key-file="${CERT_DIR}/serving-kube.key" \
       --master="https://${API_HOST_IP}:${API_SECURE_PORT}" >"${SCHEDULER_LOG}" 2>&1 &
     SCHEDULER_PID=$!
 }
