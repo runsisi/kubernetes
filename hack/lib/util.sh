@@ -75,6 +75,19 @@ kube::util::wait_for_url_with_bearer_token() {
   kube::util::wait_for_url "${url}" "${prefix}" "${wait}" "${times}" "${maxtime}" -H "Authorization: Bearer ${token}"
 }
 
+kube::util::wait_for_url_with_cert() {
+  local url=$1
+  local ca=$2
+  local cert=$3
+  local key=$4
+  local prefix=${5:-}
+  local wait=${6:-1}
+  local times=${7:-30}
+  local maxtime=${8:-1}
+
+  kube::util::wait_for_url "${url}" "${prefix}" "${wait}" "${times}" "${maxtime}" --cacert "${ca}" --cert "${cert}" --key "${key}"
+}
+
 # Example:  kube::util::wait_for_success 120 5 "kubectl get nodes|grep localhost"
 # arguments: wait time, sleep time, shell command
 # returns 0 if the shell command get output, 1 otherwise.

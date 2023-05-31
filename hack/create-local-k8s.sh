@@ -88,7 +88,8 @@ PRESERVE_ETCD="${PRESERVE_ETCD:-false}"
 ENABLE_TRACING=${ENABLE_TRACING:-false}
 
 # RBAC Mode options
-AUTHORIZATION_MODE=${AUTHORIZATION_MODE:-"Node,RBAC"}
+#AUTHORIZATION_MODE=${AUTHORIZATION_MODE:-"Node,RBAC"}
+AUTHORIZATION_MODE=${AUTHORIZATION_MODE:-"AlwaysAllow"}
 KUBECONFIG_TOKEN=${KUBECONFIG_TOKEN:-""}
 
 # WebHook Authentication and Authorization
@@ -164,7 +165,7 @@ API_CORS_ALLOWED_ORIGINS=${API_CORS_ALLOWED_ORIGINS:-/127.0.0.1(:[0-9]+)?$,/loca
 KUBELET_PORT=${KUBELET_PORT:-10250}
 # By default we use 0(close it) for it's insecure
 KUBELET_READ_ONLY_PORT=${KUBELET_READ_ONLY_PORT:-0}
-LOG_LEVEL=${LOG_LEVEL:-3}
+LOG_LEVEL=${LOG_LEVEL:-5}
 # Use to increase verbosity on particular files, e.g. LOG_SPEC=token_controller*=5,other_controller*=4
 LOG_SPEC=${LOG_SPEC:-""}
 LOG_DIR=${LOG_DIR:-"/tmp"}
@@ -414,7 +415,16 @@ function start_apiserver {
 
     # Wait for kube-apiserver to come up before launching the rest of the components.
     echo "Waiting for apiserver to come up"
-    kube::util::wait_for_url "https://${API_HOST_IP}:${API_SECURE_PORT}/healthz" "apiserver: " 1 "${WAIT_FOR_URL_API_SERVER}" "${MAX_TIME_FOR_URL_API_SERVER}" \
+    #kube::util::wait_for_url "https://${API_HOST_IP}:${API_SECURE_PORT}/healthz" "apiserver: " 1 "${WAIT_FOR_URL_API_SERVER}" "${MAX_TIME_FOR_URL_API_SERVER}" \
+    #    || { echo "check apiserver logs: ${APISERVER_LOG}" ; exit 1 ; }
+
+    ${CONTROLPLANE_SUDO} chown "${USER}" "${CERT_DIR}/client-admin.key" # make readable for kubectl & others
+
+    kube::util::wait_for_url_with_cert "https://${API_HOST_IP}:${API_SECURE_PORT}/healthz" \
+        "${CERT_DIR}/client-ca.crt" \
+        "${CERT_DIR}/client-admin.crt" \
+        "${CERT_DIR}/client-admin.key" \
+        "apiserver: " 1 "${WAIT_FOR_URL_API_SERVER}" "${MAX_TIME_FOR_URL_API_SERVER}" \
         || { echo "check apiserver logs: ${APISERVER_LOG}" ; exit 1 ; }
 
     # Create kubeconfigs for all components, using client certs
@@ -422,8 +432,6 @@ function start_apiserver {
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST_IP}" "${API_SECURE_PORT}" admin
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST_IP}" "${API_SECURE_PORT}" controller
     kube::util::write_client_kubeconfig "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "${SERVER_CA_FILE}" "${API_HOST_IP}" "${API_SECURE_PORT}" scheduler
-
-    ${CONTROLPLANE_SUDO} chown "${USER}" "${CERT_DIR}/client-admin.key" # make readable for kubectl
 
     # Grant apiserver permission to speak to the kubelet
     ${KUBECTL} --kubeconfig "${CERT_DIR}/admin.kubeconfig" create clusterrolebinding kube-apiserver-kubelet-admin --clusterrole=system:kubelet-api-admin --user=kube-apiserver
