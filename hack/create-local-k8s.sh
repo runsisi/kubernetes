@@ -72,7 +72,7 @@ DNS_DOMAIN=${KUBE_DNS_NAME:-"cluster.local"}
 WAIT_FOR_URL_API_SERVER=${WAIT_FOR_URL_API_SERVER:-60}
 MAX_TIME_FOR_URL_API_SERVER=${MAX_TIME_FOR_URL_API_SERVER:-1}
 ENABLE_DAEMON=${ENABLE_DAEMON:-false}
-HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-"127.0.0.1"}
+HOSTNAME_OVERRIDE=${HOSTNAME_OVERRIDE:-"arch"}
 EXTERNAL_CLOUD_PROVIDER_BINARY=${EXTERNAL_CLOUD_PROVIDER_BINARY:-""}
 EXTERNAL_CLOUD_VOLUME_PLUGIN=${EXTERNAL_CLOUD_VOLUME_PLUGIN:-""}
 CONFIGURE_CLOUD_ROUTES=${CONFIGURE_CLOUD_ROUTES:-true}
@@ -154,7 +154,7 @@ API_PORT=${API_PORT:-0}
 API_SECURE_PORT=${API_SECURE_PORT:-6443}
 
 # WARNING: For DNS to work on most setups you should export API_HOST_IP as the docker0 ip address,
-API_HOST_IP=${API_HOST_IP:-"127.0.0.1"}
+API_HOST_IP=${API_HOST_IP:-$(ip -4 addr show | grep -E '^\s*inet' | grep -m1 global | awk '{ print $2 }' | sed 's|/.*||')}
 NODE_PORT_RANGE=${NODE_PORT_RANGE:-""}
 EXTERNAL_HOSTNAME=${EXTERNAL_HOSTNAME:-localhost}
 
@@ -325,7 +325,7 @@ function generate_certs {
 
     # serving cert for kube-apiserver & others
     # sudo, dest-dir, ca, filename (roughly), subject, hosts...
-    kube::util::create_serving_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "server-ca" kube kubernetes.default kubernetes.default.svc "localhost" "${API_HOST_IP}" "${FIRST_SERVICE_CLUSTER_IP}"
+    kube::util::create_serving_certkey "${CONTROLPLANE_SUDO}" "${CERT_DIR}" "server-ca" kube kubernetes.default kubernetes.default.svc "localhost" "${API_HOST_IP}" "${FIRST_SERVICE_CLUSTER_IP}" "${HOSTNAME_OVERRIDE}"
 
     # Create client certs signed with client-ca, given id, given CN and a number of groups
     # sudo, dest-dir, CA, filename (roughly), username, groups...

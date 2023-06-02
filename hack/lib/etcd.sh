@@ -17,7 +17,7 @@
 # A set of helpers for starting/running etcd for tests
 
 ETCD_VERSION=${ETCD_VERSION:-3.5.8}
-ETCD_HOST=${ETCD_HOST:-127.0.0.1}
+ETCD_HOST=${ETCD_HOST:-$(ip -4 addr show | grep -E '^\s*inet' | grep -m1 global | awk '{ print $2 }' | sed 's|/.*||')}
 ETCD_PORT=${ETCD_PORT:-2379}
 # This is intentionally not called ETCD_LOG_LEVEL:
 # etcd checks that and compains when it is set in addition
