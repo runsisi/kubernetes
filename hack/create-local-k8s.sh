@@ -32,7 +32,6 @@ KUBELET_FLAGS=${KUBELET_FLAGS:-""}
 KUBELET_IMAGE=${KUBELET_IMAGE:-""}
 # Name of the dns addon, eg: "kube-dns" or "coredns"
 DNS_ADDON=${DNS_ADDON:-"coredns"}
-CLUSTER_CIDR=${CLUSTER_CIDR:-10.1.0.0/16}
 SERVICE_CLUSTER_IP_RANGE=${SERVICE_CLUSTER_IP_RANGE:-10.0.0.0/24}
 FIRST_SERVICE_CLUSTER_IP=${FIRST_SERVICE_CLUSTER_IP:-10.0.0.1}
 # if enabled, must set CGROUP_ROOT
@@ -174,7 +173,7 @@ CONTAINER_RUNTIME_ENDPOINT=${CONTAINER_RUNTIME_ENDPOINT:-"unix:///run/containerd
 RUNTIME_REQUEST_TIMEOUT=${RUNTIME_REQUEST_TIMEOUT:-"2m"}
 IMAGE_SERVICE_ENDPOINT=${IMAGE_SERVICE_ENDPOINT:-""}
 CPU_CFS_QUOTA=${CPU_CFS_QUOTA:-true}
-ENABLE_HOSTPATH_PROVISIONER=${ENABLE_HOSTPATH_PROVISIONER:-"false"}
+ENABLE_HOSTPATH_PROVISIONER=${ENABLE_HOSTPATH_PROVISIONER:-"true"}
 CLAIM_BINDER_SYNC_PERIOD=${CLAIM_BINDER_SYNC_PERIOD:-"15s"} # current k8s default
 ENABLE_CONTROLLER_ATTACH_DETACH=${ENABLE_CONTROLLER_ATTACH_DETACH:-"true"} # current default
 LOCAL_STORAGE_CAPACITY_ISOLATION=${LOCAL_STORAGE_CAPACITY_ISOLATION:-"true"} # current default
@@ -452,6 +451,7 @@ function start_controller_manager {
       --root-ca-file="${SERVER_CA_FILE}" \
       --cluster-signing-cert-file="${CERT_DIR}/client-ca.crt" \
       --cluster-signing-key-file="${CERT_DIR}/client-ca.key" \
+      --enable-hostpath-provisioner="${ENABLE_HOSTPATH_PROVISIONER}" \
       --authentication-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
       --authorization-kubeconfig "${CERT_DIR}"/controller.kubeconfig \
       --kubeconfig "${CERT_DIR}"/controller.kubeconfig \
